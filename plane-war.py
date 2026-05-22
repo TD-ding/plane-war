@@ -11,7 +11,7 @@ pygame.init()
 pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
 
 PlayerBullet = namedtuple("PlayerBullet", ["x", "y", "dx"])
-EnemyBullet = namedtuple("EnemyBullet", ["x", "y"])
+EnemyBullet = namedtuple("EnemyBullet", ["x", "y", "dx", "dy"])
 
 # ── 常量 ──────────────────────────────────────────────────────────
 WIDTH, HEIGHT = 480, 640
@@ -331,8 +331,9 @@ class Enemy:
         self.shoot_timer -= 1
         if self.shoot_timer <= 0 and self.kind >= 1:
             self.shoot_timer = int(random.randint(40, 100) * self.shoot_mult)
-            self.bullets.append(EnemyBullet(self.x, self.y + self.h))
-        self.bullets = [EnemyBullet(b.x, b.y + 5) for b in self.bullets if b.y + 5 < HEIGHT + 10]
+            self.bullets.append(EnemyBullet(self.x, self.y + self.h, 0, 4))
+        self.bullets = [EnemyBullet(b.x + b.dx, b.y + b.dy, b.dx, b.dy)
+                        for b in self.bullets if b.y + b.dy < HEIGHT + 10]
 
     def draw(self, surf):
         draw_enemy(surf, self.x, self.y, self.kind)
@@ -394,27 +395,32 @@ class Boss:
             self._shoot()
             self.shoot_timer = self.shoot_rate
 
-        bullet_speed = 4
-        self.bullets = [EnemyBullet(b.x, b.y + bullet_speed)
-                        for b in self.bullets if b.y + bullet_speed < HEIGHT + 10]
+        self.bullets = [EnemyBullet(b.x + b.dx, b.y + b.dy, b.dx, b.dy)
+                        for b in self.bullets
+                        if b.y + b.dy < HEIGHT + 10 and -20 < b.x + b.dx < WIDTH + 20]
         if self.flash_timer > 0:
             self.flash_timer -= 1
 
     def _shoot(self):
+        speed = 3.5
         if self.pattern == 0:
             for angle_offset in [-0.3, -0.15, 0, 0.15, 0.3]:
-                dx = math.sin(angle_offset) * 3
-                self.bullets.append(EnemyBullet(self.x + dx * 5, self.y + self.h))
+                dx = math.sin(angle_offset) * speed
+                dy = math.cos(angle_offset) * speed
+                self.bullets.append(EnemyBullet(self.x, self.y + self.h, dx, dy))
         elif self.pattern == 1:
-            for dx in [-30, -10, 10, 30]:
-                self.bullets.append(EnemyBullet(self.x + dx, self.y + self.h))
+            for angle in [-0.2, -0.07, 0.07, 0.2]:
+                dx = math.sin(angle) * speed
+                dy = math.cos(angle) * speed
+                self.bullets.append(EnemyBullet(self.x + math.sin(angle) * 30,
+                                             self.y + self.h, dx, dy))
         else:
             num = 12
             for k in range(num):
-                angle = 2 * math.pi * k / num + self.pattern_timer * 0.05
-                bx = self.x + math.cos(angle) * 20
-                by = self.y + self.h
-                self.bullets.append(EnemyBullet(bx, by))
+                angle = 2 * math.pi * k / num + self.pattern_timer * 0.02
+                dx = math.cos(angle) * speed * 0.8
+                dy = math.sin(angle) * speed * 0.8
+                self.bullets.append(EnemyBullet(self.x + dx * 5, self.y + self.h, dx, dy))
 
     def draw(self, surf):
         hp_ratio = max(0, self.hp / self.max_hp)
@@ -496,10 +502,8 @@ class Game:
         self.menu_diff = 1
         self.shake_timer = 0
         self.shake_offset = (0, 0)
+        self.max_combo = 0
         self.reset("normal")
-
-    def _cfg(self):
-        return DIFFICULTY_SETTINGS[DIFF_ORDER[self.menu_diff]]
 
     def reset(self, diff_key=None):
         if diff_key:
@@ -525,6 +529,7 @@ class Game:
         self.shake_timer = 0
         self.shake_offset = (0, 0)
         self.bomb_flash = 0
+        self.max_combo = 0
 
     def combo_multiplier(self):
         if self.combo < 5:
@@ -539,6 +544,8 @@ class Game:
 
     def add_kill(self, base_score, x, y, h=0):
         self.combo += 1
+        if self.combo > self.max_combo:
+            self.max_combo = self.combo
         self.combo_timer = self.combo_decay
         mult = self.combo_multiplier()
         final_score = int(base_score * mult)
@@ -579,8 +586,6 @@ class Game:
             self.boss.hp -= 10
             if self.boss.hp <= 0:
                 self._defeat_boss()
-        for e in self.enemies:
-            e.bullets.clear()
         self.player.bullets.clear()
         self.hit_flashes.clear()
 
@@ -662,6 +667,7 @@ class Game:
                     snd_hit.play()
                     if self.boss.hit():
                         self._defeat_boss()
+                    break
 
         if dead_bullets:
             self.player.bullets = [b for j, b in enumerate(self.player.bullets)
@@ -669,10 +675,6 @@ class Game:
         if dead_enemies:
             self.enemies = [e for i, e in enumerate(self.enemies)
                             if i not in dead_enemies]
-
-        all_bullets = list(self.boss.bullets) if self.boss else []
-        for e in self.enemies:
-            all_bullets.extend(e.bullets)
 
         if self.player.invincible <= 0:
             hit = False
@@ -838,7 +840,7 @@ class Game:
         surf.blit(sc, (WIDTH // 2 - sc.get_width() // 2, 260))
         kl = font_mid.render(f"击杀数: {self.kills}", True, YELLOW)
         surf.blit(kl, (WIDTH // 2 - kl.get_width() // 2, 300))
-        mc = font_sm.render(f"最大连击: {self.combo}", True, ORANGE)
+        mc = font_sm.render(f"最大连击: {self.max_combo}", True, ORANGE)
         surf.blit(mc, (WIDTH // 2 - mc.get_width() // 2, 340))
         rs = font_mid.render("按 R 重新开始", True, WHITE)
         surf.blit(rs, (WIDTH // 2 - rs.get_width() // 2, 400))
@@ -848,7 +850,6 @@ class Game:
     def run(self):
         running = True
         paused = False
-        max_combo = 0
 
         while running:
             clock.tick(FPS)
@@ -863,7 +864,6 @@ class Game:
                             self.menu_diff = (self.menu_diff + 1) % 3
                         elif event.key == pygame.K_SPACE:
                             self.reset(DIFF_ORDER[self.menu_diff])
-                            max_combo = 0
                             self.state = "playing"
                     elif self.state == "playing":
                         if event.key == pygame.K_p:
@@ -875,7 +875,6 @@ class Game:
                     elif self.state == "gameover":
                         if event.key == pygame.K_r:
                             self.reset()
-                            max_combo = 0
                             self.state = "playing"
                         if event.key == pygame.K_ESCAPE:
                             self.state = "menu"
@@ -905,8 +904,6 @@ class Game:
                     self.check_collisions()
                     self.update_effects()
                     self.game_time += 1
-                    if self.combo > max_combo:
-                        max_combo = self.combo
 
                 render_surf = pygame.Surface((WIDTH, HEIGHT))
                 render_surf.fill(BLACK)
