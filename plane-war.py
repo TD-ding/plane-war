@@ -1,10 +1,14 @@
 import math
-import pygame
+import struct
 import random
 import sys
 from collections import namedtuple
 
+import pygame
+import pygame.mixer
+
 pygame.init()
+pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
 
 PlayerBullet = namedtuple("PlayerBullet", ["x", "y", "dx"])
 EnemyBullet = namedtuple("EnemyBullet", ["x", "y"])
@@ -25,32 +29,90 @@ screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("飞机大战")
 clock = pygame.time.Clock()
 
-# 字体（尝试中文字体，回退到默认）
 _FONT_NAMES = "simhei,microsoftyahei,notosanscjksc,wenquanyimicrohei,arial"
 font_big = pygame.font.SysFont(_FONT_NAMES, 48)
 font_mid = pygame.font.SysFont(_FONT_NAMES, 28)
 font_sm = pygame.font.SysFont(_FONT_NAMES, 20)
+font_float = pygame.font.SysFont(_FONT_NAMES, 18, bold=True)
+
+
+# ── 音效生成 ──────────────────────────────────────────────────────
+def _make_sound(samples):
+    buf = struct.pack(f"<{len(samples)}h", *samples)
+    return pygame.mixer.Sound(buffer=buf)
+
+
+def _gen_shoot_sound():
+    sr = 44100
+    dur = 0.08
+    n = int(sr * dur)
+    samples = []
+    for i in range(n):
+        t = i / sr
+        freq = 1200 - 4000 * t
+        amp = int(6000 * (1 - t / dur))
+        samples.append(int(amp * math.sin(2 * math.pi * freq * t)))
+    return _make_sound(samples)
+
+
+def _gen_explosion_sound():
+    sr = 44100
+    dur = 0.25
+    n = int(sr * dur)
+    samples = []
+    for i in range(n):
+        t = i / sr
+        amp = int(10000 * (1 - t / dur) ** 2)
+        samples.append(int(amp * random.uniform(-1, 1)))
+    return _make_sound(samples)
+
+
+def _gen_hit_sound():
+    sr = 44100
+    dur = 0.04
+    n = int(sr * dur)
+    samples = []
+    for i in range(n):
+        t = i / sr
+        amp = int(4000 * (1 - t / dur))
+        samples.append(int(amp * math.sin(2 * math.pi * 2200 * t)))
+    return _make_sound(samples)
+
+
+def _gen_pickup_sound():
+    sr = 44100
+    dur = 0.15
+    n = int(sr * dur)
+    samples = []
+    for i in range(n):
+        t = i / sr
+        freq = 600 + 1200 * (t / dur)
+        amp = int(5000 * (1 - t / dur))
+        samples.append(int(amp * math.sin(2 * math.pi * freq * t)))
+    return _make_sound(samples)
+
+
+snd_shoot = _gen_shoot_sound()
+snd_explosion = _gen_explosion_sound()
+snd_hit = _gen_hit_sound()
+snd_pickup = _gen_pickup_sound()
 
 
 # ── 绘制飞机的辅助函数 ───────────────────────────────────────────
 def draw_player(surf, cx, cy):
-    """绘制玩家飞机（蓝色三角形 + 机翼）"""
     body = [(cx, cy - 20), (cx - 16, cy + 16), (cx + 16, cy + 16)]
     pygame.draw.polygon(surf, CYAN, body)
     pygame.draw.polygon(surf, WHITE, body, 2)
-    # 机翼
     lw = [(cx - 16, cy + 10), (cx - 30, cy + 22), (cx - 8, cy + 14)]
     rw = [(cx + 16, cy + 10), (cx + 30, cy + 22), (cx + 8, cy + 14)]
     pygame.draw.polygon(surf, (60, 180, 240), lw)
     pygame.draw.polygon(surf, (60, 180, 240), rw)
-    # 尾焰
     flame_h = random.randint(6, 14)
     pygame.draw.polygon(surf, YELLOW,
                         [(cx - 5, cy + 16), (cx, cy + 16 + flame_h), (cx + 5, cy + 16)])
 
 
 def draw_enemy(surf, cx, cy, kind):
-    """绘制敌机: kind=0 小型(红), kind=1 中型(橙), kind=2 大型(紫)"""
     colors = [RED, (255, 150, 30), (200, 60, 200)]
     sizes = [(14, 14), (22, 20), (30, 26)]
     w, h = sizes[kind]
@@ -65,7 +127,6 @@ def draw_enemy(surf, cx, cy, kind):
 
 
 def draw_explosion(surf, cx, cy, frame, max_frames=12):
-    """绘制爆炸效果"""
     progress = frame / max_frames
     radius = int(10 + 30 * progress)
     color = (255, max(0, 200 - int(200 * progress)), 0)
@@ -78,6 +139,14 @@ def draw_explosion(surf, cx, cy, frame, max_frames=12):
         pygame.draw.circle(surf, YELLOW, (px, py), random.randint(2, 5))
 
 
+def draw_hit_flash(surf, x, y, frame, max_frames=6):
+    progress = frame / max_frames
+    radius = int(8 + 6 * progress)
+    alpha = max(0, 255 - int(255 * progress))
+    color = (alpha, alpha, alpha)
+    pygame.draw.circle(surf, color, (int(x), int(y)), radius)
+
+
 # ── 游戏对象 ──────────────────────────────────────────────────────
 class Player:
     def __init__(self):
@@ -87,18 +156,26 @@ class Player:
         self.bullets = []
         self.shoot_cd = 0
         self.lives = 3
-        self.invincible = 0  # 无敌帧数
-        self.power = 1  # 火力等级 1-3
+        self.invincible = 0
+        self.power = 1
 
     def update(self, keys):
+        dx = 0
+        dy = 0
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            self.x = max(20, self.x - self.speed)
+            dx -= 1
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            self.x = min(WIDTH - 20, self.x + self.speed)
+            dx += 1
         if keys[pygame.K_UP] or keys[pygame.K_w]:
-            self.y = max(40, self.y - self.speed)
+            dy -= 1
         if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            self.y = min(HEIGHT - 20, self.y + self.speed)
+            dy += 1
+        length = math.hypot(dx, dy)
+        if length > 0:
+            dx = dx / length * self.speed
+            dy = dy / length * self.speed
+        self.x = max(20, min(WIDTH - 20, self.x + dx))
+        self.y = max(40, min(HEIGHT - 20, self.y + dy))
         if self.shoot_cd > 0:
             self.shoot_cd -= 1
         if self.invincible > 0:
@@ -108,6 +185,7 @@ class Player:
         if self.shoot_cd > 0:
             return
         self.shoot_cd = 8
+        snd_shoot.play()
         if self.power >= 3:
             self.bullets.append(PlayerBullet(self.x, self.y - 20, -1))
             self.bullets.append(PlayerBullet(self.x - 12, self.y - 14, 0))
@@ -125,7 +203,7 @@ class Player:
 
     def draw(self, surf):
         if self.invincible > 0 and (self.invincible // 3) % 2 == 0:
-            return  # 闪烁效果
+            return
         draw_player(surf, self.x, self.y)
         for b in self.bullets:
             pygame.draw.rect(surf, YELLOW, (b.x - 2, b.y - 6, 4, 12))
@@ -137,7 +215,7 @@ class Player:
 
 class Enemy:
     def __init__(self, kind=0):
-        self.kind = kind  # 0=小, 1=中, 2=大
+        self.kind = kind
         self.hp = [1, 3, 7][kind]
         self.max_hp = self.hp
         self.score = [100, 300, 600][kind]
@@ -163,17 +241,18 @@ class Enemy:
 
     def draw(self, surf):
         draw_enemy(surf, self.x, self.y, self.kind)
-        # 血条
         if self.hp < self.max_hp:
             bw = self.w * 2
             pygame.draw.rect(surf, RED, (self.x - bw // 2, self.y - self.h - 8, bw, 4))
             pygame.draw.rect(surf, GREEN,
-                             (self.x - bw // 2, self.y - self.h - 8, int(bw * self.hp / self.max_hp), 4))
+                             (self.x - bw // 2, self.y - self.h - 8,
+                              int(bw * self.hp / self.max_hp), 4))
         for b in self.bullets:
             pygame.draw.circle(surf, RED, (int(b.x), int(b.y)), 3)
 
     def hitbox(self):
-        return pygame.Rect(self.x - self.w, self.y - self.h // 2, self.w * 2, self.h + self.h // 2)
+        return pygame.Rect(self.x - self.w, self.y - self.h // 2,
+                           self.w * 2, self.h + self.h // 2)
 
     def offscreen(self):
         return self.y > HEIGHT + 40
@@ -183,7 +262,7 @@ class PowerUp:
     def __init__(self, x, y, kind="power"):
         self.x = x
         self.y = y
-        self.kind = kind  # "power" or "life"
+        self.kind = kind
         self.speed = 2
         self.timer = 0
 
@@ -213,10 +292,8 @@ class PowerUp:
 # ── 星空背景 ──────────────────────────────────────────────────────
 class Starfield:
     def __init__(self):
-        self.stars = []
-        for _ in range(80):
-            self.stars.append([random.randint(0, WIDTH), random.randint(0, HEIGHT),
-                               random.uniform(1, 3)])
+        self.stars = [[random.randint(0, WIDTH), random.randint(0, HEIGHT),
+                       random.uniform(1, 3)] for _ in range(80)]
 
     def update(self):
         for s in self.stars:
@@ -236,18 +313,36 @@ class Starfield:
 class Game:
     def __init__(self):
         self.starfield = Starfield()
-        self.state = "menu"  # menu / playing / gameover
+        self.state = "menu"
+        self.shake_timer = 0
+        self.shake_offset = (0, 0)
         self.reset()
 
     def reset(self):
         self.player = Player()
         self.enemies = []
-        self.explosions = []  # (x, y, frame)
+        self.explosions = []
+        self.hit_flashes = []
+        self.float_scores = []
         self.powerups = []
         self.score = 0
         self.wave_timer = 0
         self.difficulty = 1.0
         self.kills = 0
+        self.shake_timer = 0
+        self.shake_offset = (0, 0)
+
+    def trigger_shake(self, intensity=4):
+        self.shake_timer = 10
+        self.shake_intensity = intensity
+
+    def update_shake(self):
+        if self.shake_timer > 0:
+            self.shake_timer -= 1
+            i = self.shake_intensity * self.shake_timer // 10
+            self.shake_offset = (random.randint(-i, i), random.randint(-i, i))
+        else:
+            self.shake_offset = (0, 0)
 
     def spawn_wave(self):
         self.wave_timer += 1
@@ -267,7 +362,6 @@ class Game:
         self.difficulty = min(self.difficulty + 0.05, 12.0)
 
     def check_collisions(self):
-        # 玩家子弹 vs 敌机：标记后统一删除
         dead_bullets = set()
         dead_enemies = set()
         for i, e in enumerate(self.enemies):
@@ -278,10 +372,15 @@ class Game:
                 if brect.colliderect(e.hitbox()):
                     e.hp -= 1
                     dead_bullets.add(j)
+                    self.hit_flashes.append([b.x, b.y, 0])
+                    snd_hit.play()
                     if e.hp <= 0:
                         self.score += e.score
                         self.kills += 1
                         self.explosions.append([e.x, e.y, 0])
+                        self.float_scores.append([e.x, e.y - e.h, e.score, 0])
+                        snd_explosion.play()
+                        self.trigger_shake(6 if e.kind == 2 else 3)
                         if random.random() < 0.12:
                             pk = "power" if random.random() < 0.7 else "life"
                             self.powerups.append(PowerUp(e.x, e.y, pk))
@@ -289,11 +388,12 @@ class Game:
                     break
 
         if dead_bullets:
-            self.player.bullets = [b for j, b in enumerate(self.player.bullets) if j not in dead_bullets]
+            self.player.bullets = [b for j, b in enumerate(self.player.bullets)
+                                   if j not in dead_bullets]
         if dead_enemies:
-            self.enemies = [e for i, e in enumerate(self.enemies) if i not in dead_enemies]
+            self.enemies = [e for i, e in enumerate(self.enemies)
+                            if i not in dead_enemies]
 
-        # 敌机子弹 vs 玩家（命中后立即停止所有检测）
         if self.player.invincible <= 0:
             hit = False
             for e in self.enemies:
@@ -312,7 +412,6 @@ class Game:
                 if hit:
                     break
 
-            # 敌机撞玩家
             if not hit:
                 for i, e in enumerate(self.enemies):
                     if e.hitbox().colliderect(self.player.hitbox()):
@@ -321,7 +420,6 @@ class Game:
                         self.enemies.pop(i)
                         break
 
-        # 道具 vs 玩家
         remaining_pu = []
         for p in self.powerups:
             if p.hitbox().colliderect(self.player.hitbox()):
@@ -329,28 +427,51 @@ class Game:
                     self.player.power = min(3, self.player.power + 1)
                 else:
                     self.player.lives += 1
+                snd_pickup.play()
             else:
                 remaining_pu.append(p)
         self.powerups = remaining_pu
 
     def player_hit(self):
         self.player.lives -= 1
-        self.player.invincible = 90  # 1.5秒无敌
+        self.player.invincible = 90
         self.player.power = max(1, self.player.power - 1)
+        snd_explosion.play()
+        self.trigger_shake(8)
         if self.player.lives <= 0:
             self.state = "gameover"
 
+    def update_effects(self):
+        self.explosions = [[x, y, f + 1] for x, y, f in self.explosions if f < 12]
+        self.hit_flashes = [[x, y, f + 1] for x, y, f in self.hit_flashes if f < 6]
+        new_fs = []
+        for fs in self.float_scores:
+            fs[1] -= 1
+            fs[3] += 1
+            if fs[3] < 40:
+                new_fs.append(fs)
+        self.float_scores = new_fs
+        self.update_shake()
+
     def draw_hud(self, surf):
-        # 分数
         txt = font_mid.render(f"分数: {self.score}", True, WHITE)
         surf.blit(txt, (10, 10))
-        # 生命
         for i in range(self.player.lives):
             pygame.draw.polygon(surf, RED,
                                 [(15 + i * 25, 50), (10 + i * 25, 60), (20 + i * 25, 60)])
-        # 火力等级
         ptxt = font_sm.render(f"火力: {'★' * self.player.power}", True, YELLOW)
         surf.blit(ptxt, (10, 68))
+
+    def draw_effects(self, surf):
+        for x, y, f in self.hit_flashes:
+            draw_hit_flash(surf, x, y, f)
+        for x, y, f in self.explosions:
+            draw_explosion(surf, x, y, f)
+        for fx, fy, score, f in self.float_scores:
+            alpha = max(0, 255 - int(255 * f / 40))
+            color = (255, 255, min(255, 50 + alpha))
+            txt = font_float.render(f"+{score}", True, color)
+            surf.blit(txt, (fx - txt.get_width() // 2, fy))
 
     def draw_menu(self, surf):
         surf.fill(BLACK)
@@ -367,7 +488,6 @@ class Game:
         for i, line in enumerate(controls):
             t = font_sm.render(line, True, GRAY)
             surf.blit(t, (WIDTH // 2 - t.get_width() // 2, 340 + i * 30))
-        # 装饰性飞机
         draw_player(surf, WIDTH // 2, 500)
 
     def draw_gameover(self, surf):
@@ -430,18 +550,19 @@ class Game:
                         p.update()
                     self.powerups = [p for p in self.powerups if not p.offscreen()]
                     self.check_collisions()
-                    # 更新爆炸
-                    self.explosions = [[x, y, f + 1] for x, y, f in self.explosions if f < 12]
+                    self.update_effects()
 
-                self.starfield.draw(screen)
+                render_surf = pygame.Surface((WIDTH, HEIGHT))
+                render_surf.fill(BLACK)
+                self.starfield.draw(render_surf)
                 for e in self.enemies:
-                    e.draw(screen)
+                    e.draw(render_surf)
                 for p in self.powerups:
-                    p.draw(screen)
-                self.player.draw(screen)
-                for x, y, f in self.explosions:
-                    draw_explosion(screen, x, y, f)
-                self.draw_hud(screen)
+                    p.draw(render_surf)
+                self.player.draw(render_surf)
+                self.draw_effects(render_surf)
+                self.draw_hud(render_surf)
+                screen.blit(render_surf, self.shake_offset)
                 if paused:
                     overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
                     overlay.fill((0, 0, 0, 120))
