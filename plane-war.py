@@ -1,8 +1,13 @@
+import math
 import pygame
 import random
 import sys
+from collections import namedtuple
 
 pygame.init()
+
+PlayerBullet = namedtuple("PlayerBullet", ["x", "y", "dx"])
+EnemyBullet = namedtuple("EnemyBullet", ["x", "y"])
 
 # ── 常量 ──────────────────────────────────────────────────────────
 WIDTH, HEIGHT = 480, 640
@@ -66,10 +71,10 @@ def draw_explosion(surf, cx, cy, frame, max_frames=12):
     color = (255, max(0, 200 - int(200 * progress)), 0)
     pygame.draw.circle(surf, color, (cx, cy), radius, 3)
     for _ in range(6):
-        angle = random.uniform(0, 2 * 3.14159)
+        angle = random.uniform(0, 2 * math.pi)
         dist = radius * random.uniform(0.4, 1.0)
-        px = cx + int(dist * pygame.math.Vector2(1, 0).rotate_rad(angle).x)
-        py = cy + int(dist * pygame.math.Vector2(1, 0).rotate_rad(angle).y)
+        px = cx + int(dist * math.cos(angle))
+        py = cy + int(dist * math.sin(angle))
         pygame.draw.circle(surf, YELLOW, (px, py), random.randint(2, 5))
 
 
@@ -104,28 +109,27 @@ class Player:
             return
         self.shoot_cd = 8
         if self.power >= 3:
-            self.bullets.append([self.x, self.y - 20, -1])
-            self.bullets.append([self.x - 12, self.y - 14, 0])
-            self.bullets.append([self.x + 12, self.y - 14, 0])
+            self.bullets.append(PlayerBullet(self.x, self.y - 20, -1))
+            self.bullets.append(PlayerBullet(self.x - 12, self.y - 14, 0))
+            self.bullets.append(PlayerBullet(self.x + 12, self.y - 14, 0))
         elif self.power >= 2:
-            self.bullets.append([self.x - 8, self.y - 18, 0])
-            self.bullets.append([self.x + 8, self.y - 18, 0])
+            self.bullets.append(PlayerBullet(self.x - 8, self.y - 18, 0))
+            self.bullets.append(PlayerBullet(self.x + 8, self.y - 18, 0))
         else:
-            self.bullets.append([self.x, self.y - 20, 0])
+            self.bullets.append(PlayerBullet(self.x, self.y - 20, 0))
 
     def update_bullets(self):
-        for b in self.bullets:
-            b[1] -= 10
-            b[0] += b[2]
-        self.bullets = [b for b in self.bullets if b[1] > -10]
+        self.bullets = [
+            PlayerBullet(b.x + b.dx, b.y - 10, b.dx) for b in self.bullets if b.y - 10 > -10
+        ]
 
     def draw(self, surf):
         if self.invincible > 0 and (self.invincible // 3) % 2 == 0:
             return  # 闪烁效果
         draw_player(surf, self.x, self.y)
         for b in self.bullets:
-            pygame.draw.rect(surf, YELLOW, (b[0] - 2, b[1] - 6, 4, 12))
-            pygame.draw.rect(surf, WHITE, (b[0] - 1, b[1] - 6, 2, 12))
+            pygame.draw.rect(surf, YELLOW, (b.x - 2, b.y - 6, 4, 12))
+            pygame.draw.rect(surf, WHITE, (b.x - 1, b.y - 6, 2, 12))
 
     def hitbox(self):
         return pygame.Rect(self.x - 10, self.y - 10, 20, 20)
@@ -154,10 +158,8 @@ class Enemy:
         self.shoot_timer -= 1
         if self.shoot_timer <= 0 and self.kind >= 1:
             self.shoot_timer = random.randint(40, 100)
-            self.bullets.append([self.x, self.y + self.h])
-        for b in self.bullets:
-            b[1] += 5
-        self.bullets = [b for b in self.bullets if b[1] < HEIGHT + 10]
+            self.bullets.append(EnemyBullet(self.x, self.y + self.h))
+        self.bullets = [EnemyBullet(b.x, b.y + 5) for b in self.bullets if b.y + 5 < HEIGHT + 10]
 
     def draw(self, surf):
         draw_enemy(surf, self.x, self.y, self.kind)
@@ -168,7 +170,7 @@ class Enemy:
             pygame.draw.rect(surf, GREEN,
                              (self.x - bw // 2, self.y - self.h - 8, int(bw * self.hp / self.max_hp), 4))
         for b in self.bullets:
-            pygame.draw.circle(surf, RED, (int(b[0]), int(b[1])), 3)
+            pygame.draw.circle(surf, RED, (int(b.x), int(b.y)), 3)
 
     def hitbox(self):
         return pygame.Rect(self.x - self.w, self.y - self.h // 2, self.w * 2, self.h + self.h // 2)
@@ -260,57 +262,76 @@ class Game:
         else:
             kind = 0
         self.enemies.append(Enemy(kind))
-        # 额外小怪
         if self.difficulty > 2 and random.random() < 0.3:
             self.enemies.append(Enemy(0))
-        self.difficulty += 0.05
+        self.difficulty = min(self.difficulty + 0.05, 12.0)
 
     def check_collisions(self):
-        # 玩家子弹 vs 敌机
-        for e in self.enemies:
-            for b in self.player.bullets[:]:
-                brect = pygame.Rect(b[0] - 3, b[1] - 6, 6, 12)
+        # 玩家子弹 vs 敌机：标记后统一删除
+        dead_bullets = set()
+        dead_enemies = set()
+        for i, e in enumerate(self.enemies):
+            for j, b in enumerate(self.player.bullets):
+                if j in dead_bullets:
+                    continue
+                brect = pygame.Rect(b.x - 3, b.y - 6, 6, 12)
                 if brect.colliderect(e.hitbox()):
                     e.hp -= 1
-                    if b in self.player.bullets:
-                        self.player.bullets.remove(b)
+                    dead_bullets.add(j)
                     if e.hp <= 0:
                         self.score += e.score
                         self.kills += 1
                         self.explosions.append([e.x, e.y, 0])
-                        # 道具掉落
                         if random.random() < 0.12:
                             pk = "power" if random.random() < 0.7 else "life"
                             self.powerups.append(PowerUp(e.x, e.y, pk))
-                        self.enemies.remove(e)
+                        dead_enemies.add(i)
                     break
 
-        # 敌机子弹 vs 玩家
+        if dead_bullets:
+            self.player.bullets = [b for j, b in enumerate(self.player.bullets) if j not in dead_bullets]
+        if dead_enemies:
+            self.enemies = [e for i, e in enumerate(self.enemies) if i not in dead_enemies]
+
+        # 敌机子弹 vs 玩家（命中后立即停止所有检测）
         if self.player.invincible <= 0:
+            hit = False
             for e in self.enemies:
-                for b in e.bullets[:]:
-                    brect = pygame.Rect(b[0] - 3, b[1] - 3, 6, 6)
+                remaining = []
+                for b in e.bullets:
+                    if hit:
+                        remaining.append(b)
+                        continue
+                    brect = pygame.Rect(b.x - 3, b.y - 3, 6, 6)
                     if brect.colliderect(self.player.hitbox()):
                         self.player_hit()
-                        e.bullets.remove(b)
-                        break
-
-            # 敌机撞玩家
-            for e in self.enemies[:]:
-                if e.hitbox().colliderect(self.player.hitbox()):
-                    self.player_hit()
-                    self.explosions.append([e.x, e.y, 0])
-                    self.enemies.remove(e)
+                        hit = True
+                    else:
+                        remaining.append(b)
+                e.bullets = remaining
+                if hit:
                     break
 
+            # 敌机撞玩家
+            if not hit:
+                for i, e in enumerate(self.enemies):
+                    if e.hitbox().colliderect(self.player.hitbox()):
+                        self.player_hit()
+                        self.explosions.append([e.x, e.y, 0])
+                        self.enemies.pop(i)
+                        break
+
         # 道具 vs 玩家
-        for p in self.powerups[:]:
+        remaining_pu = []
+        for p in self.powerups:
             if p.hitbox().colliderect(self.player.hitbox()):
                 if p.kind == "power":
                     self.player.power = min(3, self.player.power + 1)
                 else:
                     self.player.lives += 1
-                self.powerups.remove(p)
+            else:
+                remaining_pu.append(p)
+        self.powerups = remaining_pu
 
     def player_hit(self):
         self.player.lives -= 1
@@ -333,7 +354,6 @@ class Game:
 
     def draw_menu(self, surf):
         surf.fill(BLACK)
-        self.starfield.update()
         self.starfield.draw(surf)
         title = font_big.render("飞机大战", True, CYAN)
         surf.blit(title, (WIDTH // 2 - title.get_width() // 2, 150))
