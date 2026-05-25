@@ -1,0 +1,14 @@
+[flake8]
+# 允许更长的行（游戏代码中绘制坐标参数较多）
+max-line-length = 120
+# E203: 黑色风格的切片空格（与 PEP8 略冲突）
+# W503: 二元操作符前换行（PEP8 现已推荐这种风格）
+extend-ignore = E203, W503
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    build,
+    dist,
+    *.egg-info

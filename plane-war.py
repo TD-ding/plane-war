@@ -413,7 +413,7 @@ class Boss:
                 dx = math.sin(angle) * speed
                 dy = math.cos(angle) * speed
                 self.bullets.append(EnemyBullet(self.x + math.sin(angle) * 30,
-                                             self.y + self.h, dx, dy))
+                                                self.y + self.h, dx, dy))
         else:
             num = 12
             for k in range(num):

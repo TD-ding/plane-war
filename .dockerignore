@@ -1,0 +1,34 @@
+# Git / VCS
+.git
+.gitignore
+
+# 虚拟环境与缓存
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# 文档与协作日志（不需要进入运行时镜像）
+docs
+collab-log.md
+*.md
+
+# IDE
+.vscode
+.idea
+
+# 环境变量真实文件
+.env
+.env.local
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# CI 配置（不需要进入运行时镜像）
+.github

@@ -1,0 +1,41 @@
+services:
+  # 默认服务：跑 lint + 单元测试，验证容器构建正常
+  test:
+    build: .
+    image: plane-war:latest
+    container_name: plane-war-test
+    env_file:
+      - .env
+    environment:
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+    command: ["sh", "-c", "python -m flake8 plane-war.py tests/ && python -m pytest tests/ -v"]
+
+  # 开发服务：进入交互式 shell，调试用
+  dev:
+    build: .
+    image: plane-war:latest
+    container_name: plane-war-dev
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    stdin_open: true
+    tty: true
+    command: ["bash"]
+
+  # 实际运行游戏服务：需要宿主机开启 X11 转发并设置 DISPLAY
+  # 启动命令： xhost +local:docker && DISPLAY=$DISPLAY docker compose run --rm play
+  play:
+    build: .
+    image: plane-war:latest
+    container_name: plane-war-play
+    env_file:
+      - .env
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+      SDL_VIDEODRIVER: x11
+      SDL_AUDIODRIVER: pulse
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    command: ["python", "plane-war.py"]
