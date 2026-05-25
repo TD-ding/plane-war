@@ -81,3 +81,22 @@
 | 第3轮 | hit_flash、screen shake、explosion粒子、float_scores、6种音效(struct)、暂停 | "打中反馈、爆炸更帅、飘分数、加音效、能暂停" |
 | 第4轮 | combo系统(倍率)、Boss类(3种弹幕)、use_bomb、DIFFICULTY_SETTINGS(3档)、菜单 | "连击奖励分数、大Boss隔一段时间出来、炸弹清屏、选难度" |
 | 第5轮 | Boss崩溃(break)、max_combo实例属性、EnemyBullet(x,y,dx,dy)、死代码清理 | "Boss同时打中会崩、最大连击显示0、弹幕方向不对、删没用的代码" |
+
+## 工程化补充（Step 4 + 5）
+
+迭代结束后追加的工程化收尾，不再走双 A2A 流程，由主会话直接产出：
+
+| 类别 | 内容 |
+|------|------|
+| Lint | `.flake8`（max-line-length=120，忽略 E203/W503）；修复 1 处 E128 缩进；`flake8 plane-war.py tests/` 零错误 |
+| 单元测试 | `tests/conftest.py` 设置 SDL dummy 驱动 + importlib 加载游戏模块；`tests/test_game_logic.py` 25 个测试覆盖 Player/Enemy/Boss/Game/PowerUp/难度配置 |
+| 依赖 | `requirements.txt`（pygame）+ `requirements-dev.txt`（含 flake8/pytest） |
+| Docker | `Dockerfile`（python:3.12-slim + SDL2 原生库 + 非 root + HEALTHCHECK）；`docker-compose.yml`（test/dev/play 三服务） |
+| CI | `.github/workflows/ci.yml`：安装系统依赖 → flake8 → pytest → 健康检查 → 容器构建烟测 |
+| 配置 | `.env.example`、`.gitignore`、`.dockerignore` |
+| 文档 | `docs/deployment.md`（部署+故障排查）、`docs/gameplay.md`（玩法说明）、`docs/architecture.md`（代码架构） |
+
+**验收结果**：
+
+- `python -m flake8 plane-war.py tests/` → 0 错误
+- `python -m pytest tests/ -v` → 25 passed
