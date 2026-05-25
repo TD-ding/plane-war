@@ -20,9 +20,31 @@
 ## 运行
 
 ```bash
-pip install pygame
+pip install -r requirements.txt
 python plane-war.py
 ```
+
+或使用 Docker：
+
+```bash
+docker compose up test          # 跑 lint + 单元测试
+docker compose run --rm play    # X11 转发实际玩游戏（仅 Linux 桌面）
+```
+
+## 文档
+
+- [部署与运行](docs/deployment.md) — 安装、环境变量、Docker、CI、故障排查
+- [玩法说明](docs/gameplay.md) — 操作、难度、单位、连击、道具
+- [代码架构](docs/architecture.md) — 类设计、主循环、数据结构、测试策略
+
+## 测试
+
+```bash
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy python -m pytest tests/ -v
+python -m flake8 plane-war.py tests/
+```
+
+25 个单元测试覆盖玩家火力、敌机血量、Boss 受击、连击倍率、难度配置等核心逻辑。
 
 ## 开发过程
 
